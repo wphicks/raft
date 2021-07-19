@@ -25,8 +25,8 @@ function(find_and_configure_cuco VERSION)
       BUILD_EXPORT_SET    raft-exports
       INSTALL_EXPORT_SET  raft-exports
       CPM_ARGS
-        GIT_REPOSITORY https://github.com/NVIDIA/cuCollections.git
-        GIT_TAG        dev
+        GIT_REPOSITORY https://github.com/wphicks/cuCollections.git
+        GIT_TAG        bug-inline_cuda_memcmp
         OPTIONS        "BUILD_TESTS OFF"
                        "BUILD_BENCHMARKS OFF"
                        "BUILD_EXAMPLES OFF"
