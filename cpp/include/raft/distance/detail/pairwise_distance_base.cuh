@@ -368,11 +368,11 @@ template <typename P, typename IdxT, typename T>
 dim3 launchConfigGenerator(IdxT m, IdxT n, std::size_t sMemSize, T func)
 {
   const auto numSMs  = raft::getMultiProcessorCount();
-  int numBlocksPerSm = 0;
   dim3 grid;
 
-  RAFT_CUDA_TRY(
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numBlocksPerSm, func, P::Nthreads, sMemSize));
+  auto numBlocksPerSm = get_max_active_blocks_per_multiprocessor(
+    func, P::Nthreads, sMemSize
+  );
   std::size_t minGridSize = numSMs * numBlocksPerSm;
   std::size_t yChunks     = raft::ceildiv<int>(m, P::Mblk);
   std::size_t xChunks     = raft::ceildiv<int>(n, P::Nblk);

@@ -460,12 +460,15 @@ __global__ void __launch_bounds__(BlockSize) radix_kernel(const T* in_buf,
 template <typename T, typename IdxT, int BitsPerPass, int BlockSize>
 inline dim3 get_optimal_grid_size(size_t req_batch_size, size_t len)
 {
-  int dev_id, sm_count, occupancy, max_grid_dim_y;
+  auto dev_id = int{};
+  auto sm_count = int{};
+  auto max_grid_dim_y = int{};
   RAFT_CUDA_TRY(cudaGetDevice(&dev_id));
   RAFT_CUDA_TRY(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id));
   RAFT_CUDA_TRY(cudaDeviceGetAttribute(&max_grid_dim_y, cudaDevAttrMaxGridDimY, dev_id));
-  RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-    &occupancy, radix_kernel<T, IdxT, BitsPerPass, BlockSize>, BlockSize, 0));
+  auto occupancy = get_max_active_blocks_per_multiprocessor(
+    radix_kernel<T, IdxT, BitsPerPass, BlockSize>, BlockSize
+  );
 
   // number of block we'd use if the batch size is enough to occupy the gpu in any case
   size_t blocks_per_row = ceildiv<size_t>(len, BlockSize * ITEM_PER_THREAD);

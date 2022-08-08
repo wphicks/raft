@@ -494,6 +494,28 @@ inline auto get_pool_memory_resource(rmm::mr::device_memory_resource*& mr, size_
   return pool_res;
 }
 
+/**
+ * @brief Return the maximum number of simultaneously-active blocks of a
+ * particular kernel that can run on a single multiprocessor.
+ *
+ * This function calls cudaOccupancyMaxActiveBlocksPerMultiprocessor, but it
+ * will return 1 rather than 0 if register usage is high enough to cause
+ * spilling.
+ *
+ * @param kernel the kernel to analyze.
+ * @param block_size the block size intended for this kernel.
+ * @param dynamic_smem_size per-block bytes of dynamic shared memory used by
+ * this kernel.
+ *
+ * @return the number of simultaneously active blocks for this kernel.
+ */
+template <typename T>
+auto get_max_active_blocks_per_multiprocessor(T kernel, std::size_t block_size, std::size_t dynamic_smem_size=std::size_t{}) {
+  auto max_active = int{};
+  RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active, kernel, block_size, dynamic_smem_size));
+  return std::max(max_active, 1);
+}
+
 }  // namespace raft
 
 #endif

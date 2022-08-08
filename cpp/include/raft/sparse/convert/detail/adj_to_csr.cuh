@@ -149,11 +149,13 @@ void adj_to_csr(const raft::handle_t& handle,
   // occupancy) exceeds the number of rows, assign multiple blocks to a single
   // row.
   int threads_per_block = 1024;
-  int dev_id, sm_count, blocks_per_sm;
+  auto dev_id = int{};
+  auto sm_count = int{};
   cudaGetDevice(&dev_id);
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id);
-  cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-    &blocks_per_sm, adj_to_csr_kernel<index_t>, threads_per_block, 0);
+  auto blocks_per_sm = get_max_active_blocks_per_multiprocessor(
+    adj_to_csr<index_t>, threads_per_block
+  );
 
   index_t max_active_blocks = sm_count * blocks_per_sm;
   index_t blocks_per_row    = raft::ceildiv(max_active_blocks, num_rows);

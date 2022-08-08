@@ -791,9 +791,9 @@ uint32_t configure_launch_x(uint32_t numQueries, uint32_t n_probes, int32_t sMem
   RAFT_CUDA_TRY(cudaGetDevice(&dev_id));
   int num_sms;
   RAFT_CUDA_TRY(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, dev_id));
-  int num_blocks_per_sm = 0;
-  RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-    &num_blocks_per_sm, func, kThreadsPerBlock, sMemSize));
+  auto num_blocks_per_sm = get_max_active_blocks_per_multiprocessor(
+    func, kThreadsPerBlock, sMemSize
+  );
 
   size_t min_grid_size = num_sms * num_blocks_per_sm;
   size_t min_grid_x    = ceildiv<size_t>(min_grid_size, numQueries);

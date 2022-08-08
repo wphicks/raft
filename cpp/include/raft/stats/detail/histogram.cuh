@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "raft/core/cudart_utils.hpp"
 #include <raft/common/seive.hpp>
 #include <raft/cuda_utils.cuh>
 #include <raft/cudart_utils.h>
@@ -37,9 +38,10 @@ static const int ThreadsPerBlock = 256;
 template <typename IdxT, int VecLen>
 dim3 computeGridDim(IdxT nrows, IdxT ncols, const void* kernel)
 {
-  int occupancy;
-  RAFT_CUDA_TRY(
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, kernel, ThreadsPerBlock, 0));
+  auto occupancy = get_max_active_blocks_per_multiprocessor(
+    kernel,
+    ThreadsPerBlock
+  );
   const auto maxBlks = occupancy * raft::getMultiProcessorCount();
   int nblksx         = raft::ceildiv<int>(VecLen ? nrows / VecLen : nrows, ThreadsPerBlock);
   // for cases when there aren't a lot of blocks for computing one histogram
