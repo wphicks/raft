@@ -154,7 +154,7 @@ void adj_to_csr(const raft::handle_t& handle,
   cudaGetDevice(&dev_id);
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id);
   auto blocks_per_sm = get_max_active_blocks_per_multiprocessor(
-    adj_to_csr<index_t>, threads_per_block
+    adj_to_csr_kernel<index_t>, threads_per_block
   );
 
   index_t max_active_blocks = sm_count * blocks_per_sm;
