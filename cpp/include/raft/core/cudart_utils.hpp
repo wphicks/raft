@@ -499,8 +499,7 @@ inline auto get_pool_memory_resource(rmm::mr::device_memory_resource*& mr, size_
  * particular kernel that can run on a single multiprocessor.
  *
  * This function calls cudaOccupancyMaxActiveBlocksPerMultiprocessor, but it
- * will return 1 rather than 0 if register usage is high enough to cause
- * spilling.
+ * will throw an exception if no blocks can be scheduled.
  *
  * @param kernel the kernel to analyze.
  * @param block_size the block size intended for this kernel.
