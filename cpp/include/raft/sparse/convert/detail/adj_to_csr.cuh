@@ -30,7 +30,7 @@ namespace convert {
 namespace detail {
 
 // Threads per block in adj_to_csr_kernel.
-const int adj_to_csr_tpb = 512;
+auto static constexpr const ADJ_TO_CSR_TPB = 512;
 
 /**
  * @brief Convert dense adjacency matrix into unsorted CSR format.
@@ -61,7 +61,7 @@ const int adj_to_csr_tpb = 512;
  *                             the number of non-zeros in `adj`.
  */
 template <typename index_t>
-__global__ void __launch_bounds__(adj_to_csr_tpb)
+__global__ void __launch_bounds__(ADJ_TO_CSR_TPB)
   adj_to_csr_kernel(const bool* adj,         // row-major adjacency matrix
                     const index_t* row_ind,  // precomputed row indices
                     index_t num_rows,        // # rows of adj
@@ -157,13 +157,13 @@ void adj_to_csr(const raft::handle_t& handle,
   cudaGetDevice(&dev_id);
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id);
   auto blocks_per_sm = get_max_active_blocks_per_multiprocessor(
-    adj_to_csr_kernel<index_t>, adj_to_csr_tpb
+    adj_to_csr_kernel<index_t>, ADJ_TO_CSR_TPB
   );
 
   index_t max_active_blocks = sm_count * blocks_per_sm;
   index_t blocks_per_row    = raft::ceildiv(max_active_blocks, num_rows);
   index_t grid_rows         = raft::ceildiv(max_active_blocks, blocks_per_row);
-  dim3 block(adj_to_csr_tpb, 1);
+  dim3 block(ADJ_TO_CSR_TPB, 1);
   dim3 grid(blocks_per_row, grid_rows);
 
   adj_to_csr_kernel<index_t>
