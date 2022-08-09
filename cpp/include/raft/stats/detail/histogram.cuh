@@ -38,10 +38,7 @@ static const int ThreadsPerBlock = 256;
 template <typename IdxT, int VecLen>
 dim3 computeGridDim(IdxT nrows, IdxT ncols, const void* kernel)
 {
-  auto occupancy = get_max_active_blocks_per_multiprocessor(
-    kernel,
-    ThreadsPerBlock
-  );
+  auto occupancy     = get_max_active_blocks_per_multiprocessor(kernel, ThreadsPerBlock);
   const auto maxBlks = occupancy * raft::getMultiProcessorCount();
   int nblksx         = raft::ceildiv<int>(VecLen ? nrows / VecLen : nrows, ThreadsPerBlock);
   // for cases when there aren't a lot of blocks for computing one histogram

@@ -509,9 +509,13 @@ inline auto get_pool_memory_resource(rmm::mr::device_memory_resource*& mr, size_
  * @return the number of simultaneously active blocks for this kernel.
  */
 template <typename T>
-auto get_max_active_blocks_per_multiprocessor(T kernel, std::size_t block_size, std::size_t dynamic_smem_size=std::size_t{}) {
+auto get_max_active_blocks_per_multiprocessor(T kernel,
+                                              std::size_t block_size,
+                                              std::size_t dynamic_smem_size = std::size_t{})
+{
   auto max_active = int{};
-  RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active, kernel, block_size, dynamic_smem_size));
+  RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+    &max_active, kernel, block_size, dynamic_smem_size));
   RAFT_EXPECTS(max_active > 0, "Kernel cannot be launched with given parameters");
   return max_active;
 }

@@ -152,13 +152,12 @@ void adj_to_csr(const raft::handle_t& handle,
   // independently). If the maximum number of active blocks (num_sms *
   // occupancy) exceeds the number of rows, assign multiple blocks to a single
   // row.
-  auto dev_id = int{};
+  auto dev_id   = int{};
   auto sm_count = int{};
   cudaGetDevice(&dev_id);
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id);
-  auto blocks_per_sm = get_max_active_blocks_per_multiprocessor(
-    adj_to_csr_kernel<index_t>, ADJ_TO_CSR_TPB
-  );
+  auto blocks_per_sm =
+    get_max_active_blocks_per_multiprocessor(adj_to_csr_kernel<index_t>, ADJ_TO_CSR_TPB);
 
   index_t max_active_blocks = sm_count * blocks_per_sm;
   index_t blocks_per_row    = raft::ceildiv(max_active_blocks, num_rows);

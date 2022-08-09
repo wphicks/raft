@@ -203,9 +203,8 @@ void meanvar(
     dim3 gs(raft::ceildiv<decltype(bs.x)>(D, bs.x), raft::ceildiv<decltype(bs.y)>(N, bs.y), 1);
 
     // Don't create more blocks than necessary to occupy the GPU
-    auto occupancy = get_max_active_blocks_per_multiprocessor(
-      meanvar_kernel_rowmajor<T, I, BlockSize>, BlockSize
-    );
+    auto occupancy =
+      get_max_active_blocks_per_multiprocessor(meanvar_kernel_rowmajor<T, I, BlockSize>, BlockSize);
     gs.y =
       std::min(gs.y, raft::ceildiv<decltype(gs.y)>(occupancy * getMultiProcessorCount(), gs.x));
 
