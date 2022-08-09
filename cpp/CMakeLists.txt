@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #=============================================================================
-set(RAPIDS_VERSION "22.06")
+set(RAPIDS_VERSION "22.08")
 set(RAFT_VERSION "${RAPIDS_VERSION}.00")
 
 cmake_minimum_required(VERSION 3.20.1 FATAL_ERROR)
@@ -135,7 +135,7 @@ if(RAFT_COMPILE_DIST_LIBRARY OR distance IN_LIST raft_FIND_COMPONENTS)
 endif()
 
 # add third party dependencies using CPM
-rapids_cpm_init()
+rapids_cpm_init(OVERRIDE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/versions.json)
 
 # thrust before rmm/cuco so we get the right version of thrust/cub
 include(cmake/thirdparty/get_thrust.cmake)
@@ -144,7 +144,7 @@ include(cmake/thirdparty/get_faiss.cmake)
 
 if(RAFT_ENABLE_cuco_DEPENDENCY)
   include(${rapids-cmake-dir}/cpm/cuco.cmake)
-  rapids_cpm_cuco(BUILD_EXPORT_SET raft-distance-lib-exports INSTALL_EXPORT_SET  raft-distance-lib-exports)
+  rapids_cpm_cuco(BUILD_EXPORT_SET raft-distance-lib-exports INSTALL_EXPORT_SET raft-distance-lib-exports)
 endif()
 
 if(BUILD_TESTS)
