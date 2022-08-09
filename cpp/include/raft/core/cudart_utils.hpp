@@ -513,7 +513,8 @@ template <typename T>
 auto get_max_active_blocks_per_multiprocessor(T kernel, std::size_t block_size, std::size_t dynamic_smem_size=std::size_t{}) {
   auto max_active = int{};
   RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active, kernel, block_size, dynamic_smem_size));
-  return std::max(max_active, 1);
+  RAFT_EXPECTS(max_active > 0, "Kernel cannot be launched with given parameters");
+  return max_active;
 }
 
 }  // namespace raft
