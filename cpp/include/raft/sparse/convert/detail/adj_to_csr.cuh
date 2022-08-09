@@ -29,6 +29,9 @@ namespace sparse {
 namespace convert {
 namespace detail {
 
+// Threads per block in adj_to_csr_kernel.
+const int adj_to_csr_tpb = 512;
+
 /**
  * @brief Convert dense adjacency matrix into unsorted CSR format.
  *
@@ -58,13 +61,14 @@ namespace detail {
  *                             the number of non-zeros in `adj`.
  */
 template <typename index_t>
-__global__ void adj_to_csr_kernel(const bool* adj,         // row-major adjacency matrix
-                                  const index_t* row_ind,  // precomputed row indices
-                                  index_t num_rows,        // # rows of adj
-                                  index_t num_cols,        // # cols of adj
-                                  index_t* row_counters,   // pre-allocated (zeroed) atomic counters
-                                  index_t* out_col_ind     // output column indices
-)
+__global__ void __launch_bounds__(adj_to_csr_tpb)
+  adj_to_csr_kernel(const bool* adj,         // row-major adjacency matrix
+                    const index_t* row_ind,  // precomputed row indices
+                    index_t num_rows,        // # rows of adj
+                    index_t num_cols,        // # cols of adj
+                    index_t* row_counters,   // pre-allocated (zeroed) atomic counters
+                    index_t* out_col_ind     // output column indices
+  )
 {
   const int chunk_size = 16;
   typedef raft::TxN_t<bool, chunk_size> chunk_bool;
@@ -148,19 +152,18 @@ void adj_to_csr(const raft::handle_t& handle,
   // independently). If the maximum number of active blocks (num_sms *
   // occupancy) exceeds the number of rows, assign multiple blocks to a single
   // row.
-  int threads_per_block = 1024;
   auto dev_id = int{};
   auto sm_count = int{};
   cudaGetDevice(&dev_id);
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev_id);
   auto blocks_per_sm = get_max_active_blocks_per_multiprocessor(
-    adj_to_csr_kernel<index_t>, threads_per_block
+    adj_to_csr_kernel<index_t>, adj_to_csr_tpb
   );
 
   index_t max_active_blocks = sm_count * blocks_per_sm;
   index_t blocks_per_row    = raft::ceildiv(max_active_blocks, num_rows);
   index_t grid_rows         = raft::ceildiv(max_active_blocks, blocks_per_row);
-  dim3 block(threads_per_block, 1);
+  dim3 block(adj_to_csr_tpb, 1);
   dim3 grid(blocks_per_row, grid_rows);
 
   adj_to_csr_kernel<index_t>
