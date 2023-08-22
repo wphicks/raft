@@ -391,6 +391,24 @@ struct streamsafe_wrapper {
     return wrapped_->*func(res, std::forward<Args>(args)...);
   }
 
+  template <typename... LambdaTs>
+  auto apply_lambdas(res, LambdaTs&&... lambdas)
+  {
+    if constexpr (sizeof...(lambdas) == 1) { return }
+  }
+
+  template <typename... LambdaTs>
+  auto apply(raft::resources const& res, LambdaTs&&... lambdas)
+  {
+    return apply_<modifier_lock>(res, std::move(lambdas)...);
+  }
+
+  template <typename... LambdaTs>
+  auto apply(raft::resources const& res, LambdaTs&&... lambdas) const
+  {
+    return apply_<user_lock>(res, std::move(lambdas)...);
+  }
+
   // Synchronize all device-side work that has occurred on the underlying
   // object, including both modification and use
   auto synchronize() { mtx_->synchronize(); }
@@ -606,6 +624,23 @@ struct streamsafe_wrapper {
    private:
     modification_mutex const* mtx_;
   };
+
+  template <typename LockT, typename... LambdaTs>
+  auto apply_(raft::resources const& res, LambdaTs&&... lambdas)
+  {
+    auto lock = LockT{mtx_, res, true};
+    if constexpr (sizeof...(lambdas) == 1) {
+      return std::get<0>(std::make_tuple(std::move(lambdas)...))(res, get_wrapped());
+    } else {
+      return std::make_tuple([&res, this](auto&& f) {
+        auto res_from_pool = resources(res);
+        resource::set_cuda_stream(res_from_pool, resource::get_next_usable_stream(res));
+        return f(res_from_pool, get_wrapped());
+      }(lambdas)...);
+    }
+  }
+  auto& get_wrapped() { return *wrapped_; }
+  auto const& get_wrapped() const { return *wrapped_; }
   modification_mutex mtx_;
   std::unique_ptr<T> wrapped_;
 };
