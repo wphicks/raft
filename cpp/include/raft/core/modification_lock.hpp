@@ -193,17 +193,6 @@ struct threadsafe_wrapper {
 /* A wrapper used to ensure that an object is not being used while it is being
  * modified on another host thread or device stream
  *
- * Much like threadsafe_wrapper, streamsafe_wrapper is designed to
- * efficiently ensure that an object is not being modified and used at the
- * same time. It *does* expose a method (`unsafe_call`) to allow modifying device work to
- * overlap on different streams, but those modifications are guaranteed not to
- * overlap with non-modifying access. This is useful for e.g. building an
- * input matrix by copying different rows on different streams, but the caller
- * is responsible for ensuring that this overlapping access does not lead
- * to a race condition between different modifiers. Stick to the ordinary
- * `call` method for a strong guarantee that modifications to the
- * underlying object will occur serially.
- *
  * Example usage:
  *
  * struct foo() {
@@ -249,114 +238,7 @@ struct threadsafe_wrapper {
  * auto data2 = raft::host_vector<int>{res2, 2};
  * data2(0) = 5;
  * data2(1) = 6;
- *
- * // Note that we do not need to explicitly synchronize res0, even though
- * // it was used to provide stream-ordered allocation when f_safe was
- * // constructed. The wrapper will synchronize before any subsequent
- * // modification or use with the call method.
- *
- * // The following 3 calls will happen serially, with synchronization in
- * // between each call.
- * f_safe.call(foo::set_row, res0, 0, data0);
- * f_safe.call(foo::set_row, res1, 1, data1);
- * f_safe.call(foo::set_row, res2, 2, data2);
- *
- * // Even though the last call has not synchronized yet, we can safely start
- * // accessing foo. The last copy will synchronize before any of the
- * // following calls are launched.
- *
- * // The following calls will all overlap on the device using different
- * // streams. Even though we are retrieving on different streams than were
- * // used to write each of these rows, the wrapper will synchronize on the
- * // streams previously used to modify the wrapped object before allowing
- * // access to that object with any of the following calls.
- * auto row2 = std::as_const(f_safe).call(foo::get_row, res0, 2);
- * auto row1 = std::as_const(f_safe).call(foo::get_row, res1, 1);
- * auto row0 = std::as_const(f_safe).call(foo::get_row, res1, 0);
- *
- * // Note that it is not yet safe to access row0, row1, and row2 data on the
- * // host, since we have not yet synchronized the resources used to access
- * // them. We could simply call resource::sync_stream on res0 and res1, but we
- * // would prefer to avoid unnecessary re-synchronization once this has
- * // occurred. To keep track of which streams still require
- * // synchronization, we can instead use a helper method of the
- * // streamsafe_wrapper.
- *
- * // Synchronize on the streams owned by res0 and if those streams are in our
- * // list of streams which might require synchronization, remove them.
- * f_safe.synchronize(res0);
- *
- * // We may wish to be even more efficient than that, avoiding any
- * // synchronization at all if it is no longer required. For instance, if
- * // set_row had been called from another thread after the get_row calls
- * // above, the accessor stream provided by res1 would already have been
- * synchronized. To synchronize only streams which have been used to access
- * // or modify the wrapped object, streamsafe_wrapper offers an additional
- * // helper.
- *
- * f_safe.synchronize_if_required(res1);
- *
- * // row0, row1, and row2 can now safely be accessed from the host.
- *
- * // Note that in the above example, we could have been slightly more
- * // efficient if we were allowed to overlap the copies of the three rows
- * // into the underlying foo buffer to begin with. Let's run through the
- * // same example using unsafe_call to demonstrate how this would be done.
- * auto f_unsafe = streamsafe_wrapper<foo>{res0};
- *
- * // Note that res0's stream was used to make the initial device
- * // allocation. So, we are free to make an unsafe_call using res0. This
- * // is useful because it allows us to avoid an unnecessary
- * // synchronization on the same stream after allocation.
- *
- * f_unsafe.unsafe_call(foo::set_row, res0, 0, data0);
- *
- * // Now we would like to use different streams to efficiently copy the
- * // remaining data to device. Because we still cannot be sure that the device
- * // allocation has completed, we must manually synchronize if we are going
- * // to use unsafe_call. We could simply synchronize res0, or if we just
- * // want to efficiently ensure that all device-side modification and access to f_unsafe's
- * device-side
- * // data is complete, we can use another synchronization helper.
- *
- * // Synchronize on all streams that have been used to modify or access
- * // f_unsafe and which we do not yet know to have been synchronized
- * f_unsafe.synchronize();
- *
- * // Write rows 1 and 2 simultaneously on two different streams. As the name
- * // implies, unsafe_call requires the caller to guarantee that this
- * // modification does not lead to a race. If, for instance, we tried to
- * // write both data1 and data2 to row 1 on separate streams, we cannot
- * // predict what data would end up in the buffer afterward.
- * f_unsafe.unsafe_call(foo::set_row, res1, 1, data1);
- * f_unsafe.unsafe_call(foo::set_row, res2, 2, data2);
- *
- * // Even though unsafe_calls are not stream-safe with respect to each other
- * // or any prior call, they *are* stream-safe with any subsequent safe call.
- * // Therefore, we can now access the data we have just written without an
- * // explicit synchronization.
- *
- * auto row2_unsafe = std::as_const(f_unsafe).call(foo::get_row, res0, 2);
- * auto row1_unsafe = std::as_const(f_unsafe).call(foo::get_row, res1, 1);
- * auto row0_unsafe = std::as_const(f_unsafe).call(foo::get_row, res2, 0);
- *
- * // As before, we must synchronize before accessing the data on the host
- * // to ensure that the device-to-host copies are complete. In general, it is
- * // most efficient to call the synchronize_if_required helper with each
- * // of the raft resources which we have just used for data access, but for
- * // brevity, we will use the synchronize helper again, which ensures
- * // synchronization of device-side accesses as well as device-side
- * // modifications of the wrapped object.
- *
- * f_unsafe.synchronize();
- *
- * // General rules to remember:
- * // 1. When accessing object data, always use `call` and synchronize only
- * // on the resources used in that access.
- * // 2. When modifying object data, `unsafe_call` can be used so long as
- * // concurrent calls are accessing non-overlapping device memory.
- * // 3. If in doubt, use the `synchronize_if_required` helper to
- * // efficiently synchronize.
+ * TODO(wphicks)
  */
 template <typename T>
 struct streamsafe_wrapper {
@@ -370,31 +252,6 @@ struct streamsafe_wrapper {
           std::move(args));
       }()}
   {
-  }
-
-  template <typename Ret, typename... Args>
-  auto call(Ret (T::*func)(resources const&, Args...), resources const& res, Args... args) const
-  {
-    auto lock = user_lock{mtx_, res};
-    return wrapped_->*func(res, std::forward<Args>(args)...);
-  }
-  template <typename Ret, typename... Args>
-  auto call(Ret (T::*func)(resources const&, Args...), resources const& res, Args... args)
-  {
-    auto lock = modifier_lock{mtx_, res};
-    return wrapped_->*func(res, std::forward<Args>(args)...);
-  }
-  template <typename Ret, typename... Args>
-  auto unsafe_call(Ret (T::*func)(resources const&, Args...), resources const& res, Args... args)
-  {
-    auto lock = modifier_lock{mtx_, res, true};
-    return wrapped_->*func(res, std::forward<Args>(args)...);
-  }
-
-  template <typename... LambdaTs>
-  auto apply_lambdas(res, LambdaTs&&... lambdas)
-  {
-    if constexpr (sizeof...(lambdas) == 1) { return }
   }
 
   template <typename... LambdaTs>
