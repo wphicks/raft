@@ -15,11 +15,11 @@
  */
 
 #pragma once
-#include <stddef.h>
 #include <raft/core/error.hpp>
 #include <raft/core/logger-macros.hpp>
 #include <raft/core/resources.hpp>
 #include <raft/thirdparty/mdspan/include/experimental/mdspan>
+#include <stddef.h>
 
 namespace raft {
 namespace detail {
@@ -32,24 +32,19 @@ struct fail_reference {
 
   fail_reference() = default;
   template <typename StreamViewType>
-  fail_reference(T* ptr, StreamViewType stream) {
-    throw non_cuda_build_error{
-      "Attempted to construct reference to device data in non-CUDA build"
-    };
+  fail_reference(T* ptr, StreamViewType stream)
+  {
+    throw non_cuda_build_error{"Attempted to construct reference to device data in non-CUDA build"};
   }
 
   operator value_type() const  // NOLINT
   {
-    throw non_cuda_build_error{
-      "Attempted to dereference device data in non-CUDA build"
-    };
+    throw non_cuda_build_error{"Attempted to dereference device data in non-CUDA build"};
     return value_type{};
   }
   auto operator=(T const& other) -> fail_reference&
   {
-    throw non_cuda_build_error{
-      "Attempted to assign to device data in non-CUDA build"
-    };
+    throw non_cuda_build_error{"Attempted to assign to device data in non-CUDA build"};
     return *this;
   }
 };
@@ -68,50 +63,45 @@ struct fail_container {
   using value_type = T;
   using size_type  = std::size_t;
 
-  using reference = fail_reference<T>;
+  using reference       = fail_reference<T>;
   using const_reference = fail_reference<T const>;
 
-  using pointer = value_type*;
+  using pointer       = value_type*;
   using const_pointer = value_type const*;
 
-  using iterator = pointer;
+  using iterator       = pointer;
   using const_iterator = const_pointer;
 
-  explicit fail_container(size_t n=size_t{}) {
+  explicit fail_container(size_t n = size_t{})
+  {
     if (n != size_t{}) {
-      throw non_cuda_build_error{
-        "Attempted to allocate device container in non-CUDA build"
-      };
+      throw non_cuda_build_error{"Attempted to allocate device container in non-CUDA build"};
     }
   }
 
   template <typename Index>
-  auto operator[](Index i) noexcept -> reference {
-      RAFT_LOG_ERROR(
-        "Attempted to access device data in non-CUDA build"
-      );
-      return reference{};
+  auto operator[](Index i) noexcept -> reference
+  {
+    RAFT_LOG_ERROR("Attempted to access device data in non-CUDA build");
+    return reference{};
   }
 
   template <typename Index>
-  auto operator[](Index i) const noexcept -> const_reference {
-      RAFT_LOG_ERROR(
-        "Attempted to access device data in non-CUDA build"
-      );
-      return const_reference{};
+  auto operator[](Index i) const noexcept -> const_reference
+  {
+    RAFT_LOG_ERROR("Attempted to access device data in non-CUDA build");
+    return const_reference{};
   }
-  void resize(size_t n) {
+  void resize(size_t n)
+  {
     if (n != size_t{}) {
-      throw non_cuda_build_error{
-        "Attempted to allocate device container in non-CUDA build"
-      };
+      throw non_cuda_build_error{"Attempted to allocate device container in non-CUDA build"};
     }
   }
 
   [[nodiscard]] auto data() noexcept -> pointer { return nullptr; }
   [[nodiscard]] auto data() const noexcept -> const_pointer { return nullptr; }
 };
-
 
 /** A placeholder container policy which throws an exception on use
  *
@@ -124,20 +114,17 @@ struct fail_container {
  */
 template <typename ElementType>
 struct fail_container_policy {
-  using element_type = ElementType;
-  using container_type = fail_container<element_type>;
+  using element_type    = ElementType;
+  using container_type  = fail_container<element_type>;
   using pointer         = typename container_type::pointer;
   using const_pointer   = typename container_type::const_pointer;
   using reference       = typename container_type::reference;
-  using const_reference       = typename container_type::const_reference;
+  using const_reference = typename container_type::const_reference;
 
   using accessor_policy       = std::experimental::default_accessor<element_type>;
   using const_accessor_policy = std::experimental::default_accessor<element_type const>;
 
-  auto create(raft::resources const& res, size_t n) -> container_type
-  {
-    return container_type(n);
-  }
+  auto create(raft::resources const& res, size_t n) -> container_type { return container_type(n); }
 
   fail_container_policy() = default;
 

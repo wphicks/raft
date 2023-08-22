@@ -16,7 +16,6 @@
 
 #include <gtest/gtest.h>
 #include <raft/core/host_mdarray.hpp>
-#include <raft/core/host_mdarray.hpp>
 #include <raft/core/mdbuffer.hpp>
 #include <raft/core/mdspan_types.hpp>
 #include <raft/core/memory_type.hpp>
@@ -25,42 +24,41 @@
 #include <raft/core/device_mdarray.hpp>
 #endif
 namespace raft {
-TEST(MDBuffer, DefaultConstructor) {
-  auto buf = mdbuffer<int, matrix_extent<int>>{};
-}
+TEST(MDBuffer, DefaultConstructor) { auto buf = mdbuffer<int, matrix_extent<int>>{}; }
 
-TEST(MDBuffer, FromHost) {
-  auto res = raft::resources{};
-  auto rows = 3;
+TEST(MDBuffer, FromHost)
+{
+  auto res      = raft::resources{};
+  auto rows     = 3;
   auto features = 5;
-  auto matrix = make_host_matrix<float>(res, rows, features);
-  auto buf = mdbuffer{matrix};
+  auto matrix   = make_host_matrix<float>(res, rows, features);
+  auto buf      = mdbuffer{matrix};
   ASSERT_EQ(buf.mem_type(), memory_type::host);
   ASSERT_FALSE(buf.is_owning());
   ASSERT_EQ(buf.data_handle(), matrix.data_handle());
 
   auto* ptr = matrix.data_handle();
-  buf = mdbuffer{std::move(matrix)};
+  buf       = mdbuffer{std::move(matrix)};
   ASSERT_EQ(buf.mem_type(), memory_type::host);
   ASSERT_TRUE(buf.is_owning());
   ASSERT_EQ(buf.data_handle(), ptr);
 }
 
-TEST(MDBuffer, FromDevice) {
-  auto res = raft::resources{};
-  auto rows = 3;
+TEST(MDBuffer, FromDevice)
+{
+  auto res      = raft::resources{};
+  auto rows     = 3;
   auto features = 5;
-  auto matrix = make_device_matrix<float>(res, rows, features);
-  auto buf = mdbuffer{matrix};
+  auto matrix   = make_device_matrix<float>(res, rows, features);
+  auto buf      = mdbuffer{matrix};
   ASSERT_EQ(buf.mem_type(), memory_type::device);
   ASSERT_FALSE(buf.is_owning());
   ASSERT_EQ(buf.data_handle(), matrix.data_handle());
 
   auto* ptr = matrix.data_handle();
-  buf = mdbuffer{std::move(matrix)};
+  buf       = mdbuffer{std::move(matrix)};
   ASSERT_EQ(buf.mem_type(), memory_type::device);
   ASSERT_TRUE(buf.is_owning());
   ASSERT_EQ(buf.data_handle(), ptr);
 }
 }  // namespace raft
-

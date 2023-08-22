@@ -22,31 +22,29 @@ namespace raft {
 template <typename variant1, typename variant2>
 struct concatenated_variant;
 
-template <typename ... types1, typename ... types2>
-struct concatenated_variant <std::variant<types1...>, std::variant<types2...>>{
+template <typename... types1, typename... types2>
+struct concatenated_variant<std::variant<types1...>, std::variant<types2...>> {
   using type = std::variant<types1..., types2...>;
 };
 
-template<typename variant1, typename variant2>
+template <typename variant1, typename variant2>
 using concatenated_variant_t = typename concatenated_variant<variant1, variant2>::type;
 
-template <typename visitor_t, typename variant_t, std::size_t index=std::size_t{}>
-auto fast_visit (visitor_t&& visitor, variant_t&& variant) {
-  using return_t = decltype(
-    std::forward<visitor_t>(visitor)(std::get<0>(variant))
-  );
-  auto result = return_t{};
+template <typename visitor_t, typename variant_t, std::size_t index = std::size_t{}>
+auto fast_visit(visitor_t&& visitor, variant_t&& variant)
+{
+  using return_t = decltype(std::forward<visitor_t>(visitor)(std::get<0>(variant)));
+  auto result    = return_t{};
 
-  if constexpr (index == std::variant_size_v<std::remove_cv_t<std::remove_reference_t<variant_t>>>) {
-        __builtin_unreachable();
+  if constexpr (index ==
+                std::variant_size_v<std::remove_cv_t<std::remove_reference_t<variant_t>>>) {
+    __builtin_unreachable();
   } else {
     if (index == variant.index()) {
       result = std::forward<visitor_t>(visitor)(std::get<index>(std::forward<variant_t>(variant)));
     } else {
-      result = fast_visit<visitor_t, variant_t, index+1>(
-        std::forward<visitor_t>(visitor),
-        std::forward<variant_t>(variant)
-      );
+      result = fast_visit<visitor_t, variant_t, index + 1>(std::forward<visitor_t>(visitor),
+                                                           std::forward<variant_t>(variant));
     }
   }
   return result;
