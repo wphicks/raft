@@ -1,17 +1,86 @@
+/*
+ * Copyright (c) 2023, NVIDIA CORPORATION.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <cuda_runtime.h>
 #include <memory>
 #include <mutex>
+#include <raft/core/resource/cuda_stream.hpp>
+#include <raft/core/resource/cuda_stream_pool.hpp>
+#include <raft/core/resources.hpp>
+#include <raft/util/cuda_rt_essentials.hpp>
+#include <rmm/cuda_stream_view.hpp>
+#include <set>
+#include <thread>
 #include <type_traits>
 
+namespace raft {
 
-template<typename T, typename L>
+template <typename T, typename L>
 struct locked_proxy {
   locked_proxy(T* wrapped, L&& lock) : wrapped_{wrapped}, lock_{std::move(lock)} {}
   auto* operator->() { return wrapped_; }
+
  private:
   T* wrapped_;
   L lock_;
+};
+
+/* A mutex which yields to threads in the order in which they attempt to
+ * acquire a lock.
+ */
+struct ordered_mutex {
+  void lock()
+  {
+    auto scoped_lock = std::unique_lock<std::mutex>{raw_mtx_};
+    auto ticket      = next_ticket_++;
+    queue_control_.wait(scoped_lock, [ticket, this]() { return ticket == current_ticket_; });
+  }
+
+  void unlock()
+  {
+    auto scoped_lock = std::unique_lock<std::mutex>{raw_mtx_};
+    ++current_ticket_;
+    queue_control_.notify_all();
+  }
+
+ private:
+  std::condition_variable queue_control_{};
+  std::mutex raw_mtx_{};
+  std::size_t next_ticket_{};
+  std::size_t current_ticket_{};
+};
+
+/* A scoped lock based on ordered_mutex, which will be acquired in the order in which
+ * threads attempt to acquire the underlying mutex */
+struct ordered_lock {
+  explicit ordered_lock(ordered_mutex& mtx)
+    : mtx_{[&mtx]() {
+        mtx.lock();
+        return &mtx;
+      }()}
+  {
+  }
+
+  ~ordered_lock() { mtx_->unlock(); }
+
+ private:
+  ordered_mutex* mtx_;
 };
 
 /* This struct wraps an object which may be modified from some host threads
@@ -23,6 +92,10 @@ struct locked_proxy {
  * to the underlying object has been completed. Non-const access will
  * acquire a lock on the same underlying mutex but not proceed with the
  * non-const call until the counter reaches 0.
+ *
+ * A special lock (ordered_lock) ensures that the mutex is acquired in the
+ * order that threads attempt to acquire it. This ensures that
+ * modifying threads are not indefinitely delayed.
  *
  * Example usage:
  *
@@ -40,57 +113,60 @@ struct locked_proxy {
  * std::as_const(f)->get_data();  // Safe and efficient. Returns 6.
  * std::as_const(f)->set_data(7);  // Fails to compile.
  */
-template<typename T>
+template <typename T>
 struct threadsafe_wrapper {
-  template<typename... Args>
-  threadsafe_wrapper(Args&&... args): wrapped{std::make_unique<T>(std::forward<Args>(args)...)} {}
-  auto operator->() {
-    return locked_proxy<T*, modifier_lock>{wrapped.get(), modifier_lock{mtx_}};
+  template <typename... Args>
+  threadsafe_wrapper(Args&&... args) : wrapped{std::make_unique<T>(std::forward<Args>(args)...)}
+  {
   }
-  auto operator->() const {
+  auto operator->() { return locked_proxy<T*, modifier_lock>{wrapped.get(), modifier_lock{mtx_}}; }
+  auto operator->() const
+  {
     return locked_proxy<T const*, user_lock>{wrapped.get(), user_lock{mtx_}};
   }
+
  private:
   // A class for coordinating access to a resource that may be modified by some
   // threads and used without modification by others.
   class modification_mutex {
-    void acquire_for_modifier() {
+    void acquire_for_modifier()
+    {
       // Prevent any new users from incrementing work counter
-      // TODO(wphicks): Use ordered locks for this
-      lock_ = std::make_unique<std::unique_lock<std::mutex>>(mtx_);
+      lock_ = std::make_unique<ordered_lock>(mtx_);
       // Wait until all work in progress is done
-      while(currently_using_.load() != 0);
+      while (currently_using_.load() != 0)
+        ;
       std::atomic_thread_fence(std::memory_order_acquire);
     }
-    void release_from_modifier() {
-      lock_.reset();
-    }
-    void acquire_for_user() const {
-      auto tmp_lock = std::unique_lock<std::mutex>{mtx_};
+    void release_from_modifier() { lock_.reset(); }
+    void acquire_for_user() const
+    {
+      auto tmp_lock = ordered_lock{mtx_};
       ++currently_using_;
     }
-    void release_from_user() const {
+    void release_from_user() const
+    {
       std::atomic_thread_fence(std::memory_order_release);
       --currently_using_;
     }
-    mutable std::mutex mtx_{};
+    mutable ordered_mutex mtx_{};
     mutable std::atomic<int> currently_using_{};
-    mutable std::unique_ptr<std::unique_lock<std::mutex>> lock_{nullptr};
+    mutable std::unique_ptr<ordered_lock> lock_{nullptr};
     friend struct modifier_lock;
     friend struct user_lock;
   };
 
   // A lock acquired to modify the wrapped object.
   struct modifier_lock {
-    modifier_lock(modification_mutex& mtx) : mtx_{
-      [&mtx]() {
-        mtx.acquire_for_modifier();
-        return &mtx;
-      }()
-    } {}
-    ~modifier_lock() {
-      mtx_->release_from_modifier();
+    modifier_lock(modification_mutex& mtx)
+      : mtx_{[&mtx]() {
+          mtx.acquire_for_modifier();
+          return &mtx;
+        }()}
+    {
     }
+    ~modifier_lock() { mtx_->release_from_modifier(); }
+
    private:
     modification_mutex* mtx_;
   };
@@ -98,15 +174,15 @@ struct threadsafe_wrapper {
   // A lock acquired to use but not modify the wrapped object. We ensure that
   // only const methods can be accessed while protected by this lock.
   struct user_lock {
-    user_lock(modification_mutex const& mtx) : mtx_{
-      [&mtx]() {
-        mtx.acquire_for_user();
-        return &mtx;
-      }()
-    } {}
-    ~user_lock() {
-      mtx_->release_from_user();
+    user_lock(modification_mutex const& mtx)
+      : mtx_{[&mtx]() {
+          mtx.acquire_for_user();
+          return &mtx;
+        }()}
+    {
     }
+    ~user_lock() { mtx_->release_from_user(); }
+
    private:
     modification_mutex const* mtx_;
   };
@@ -114,110 +190,403 @@ struct threadsafe_wrapper {
   std::unique_ptr<T> wrapped;
 };
 
-#define RAFT_STREAMSAFE_CALL(wrapper, methodname, ...) wrapper.call(typename decltype(wrapper)::wrapped_type::methodname, __VA_ARGS__)
-
-#define RAFT_CONST_STREAMSAFE_CALL(wrapper, methodname, ...) std::as_const(wrapper).call(typename decltype(wrapper)::wrapped_type::methodname, __VA_ARGS__)
-
-/* Example usage:
+/* A wrapper used to ensure that an object is not being used while it is being
+ * modified on another host thread or device stream
+ *
+ * Much like threadsafe_wrapper, streamsafe_wrapper is designed to
+ * efficiently ensure that an object is not being modified and used at the
+ * same time. It *does* expose a method (`unsafe_call`) to allow modifying device work to
+ * overlap on different streams, but those modifications are guaranteed not to
+ * overlap with non-modifying access. This is useful for e.g. building an
+ * input matrix by copying different rows on different streams, but the caller
+ * is responsible for ensuring that this overlapping access does not lead
+ * to a race condition between different modifiers. Stick to the ordinary
+ * `call` method for a strong guarantee that modifications to the
+ * underlying object will occur serially.
+ *
+ * Example usage:
  *
  * struct foo() {
- *   foo(int data) : data_{data} {}
- *   auto get_data() const { return data_; }
- *   void set_data(int new_data) { data_ = new_data; }
+ *   foo(raft::resources const& res) : data_{res, 3, 2} {}
+ *   auto get_row(raft::resources const& res, int row_idx) const {
+ *     auto result = raft::make_host_vector<int>{res, data_.extent(1)};
+ *     raft::copy(
+ *       result.data_handle(),
+ *       data_.data_handle() + row_idx * data_.extent(1),
+ *       data_.extent(1),
+ *       raft::resource::get_cuda_stream(res)
+ *     );
+ *     return result;
+ *   }
+ *   void set_row(raft::resources const& res, int row_idx, raft::host_vector<int> row) {
+ *     raft::copy(
+ *       data_.data_handle() + row_idx * data_.extent(1),
+ *       row.data_handle(),
+ *       data_.extent(1),
+ *       raft::resource::get_cuda_stream(res)
+ *     );
+ *   }
  *  private:
- *   int data_;
+ *   raft::device_matrix<int> data_;
  * };
  *
- * auto f = streamsafe_wrapper<foo>{5};
- * auto& res = raft::device_resources_manager::get_device_resources();
- * f.call(foo::wrapped_type::set_data, res, 6);
- * RAFT_STREAMSAFE_CALL(f, set_data, res, 6);
- * f.call(foo::wrapped_type::get_data, res);
- * RAFT_STREAMSAFE_CALL(f, get_data);
- * std::as_const(f).call(foo::wrapped_type::get_data, res);
- * RAFT_CONST_STREAMSAFE_CALL(f, get_data);
+ * auto stream0 = rmm::cuda_stream{};
+ * auto stream1 = rmm::cuda_stream{};
+ * auto stream2 = rmm::cuda_stream{};
+ *
+ * auto res0 = raft::device_resources{stream0.view()};
+ * auto res1 = raft::device_resources{stream1.view()};
+ * auto res2 = raft::device_resources{stream2.view()};
+ *
+ * auto f_safe = streamsafe_wrapper<foo>{res0};
+ *
+ * auto data0 = raft::host_vector<int>{res0, 2};
+ * data0(0) = 1;
+ * data0(1) = 2;
+ * auto data1 = raft::host_vector<int>{res1, 2};
+ * data1(0) = 3;
+ * data1(1) = 4;
+ * auto data2 = raft::host_vector<int>{res2, 2};
+ * data2(0) = 5;
+ * data2(1) = 6;
+ *
+ * // Note that we do not need to explicitly synchronize res0, even though
+ * // it was used to provide stream-ordered allocation when f_safe was
+ * // constructed. The wrapper will synchronize before any subsequent
+ * // modification or use with the call method.
+ *
+ * // The following 3 calls will happen serially, with synchronization in
+ * // between each call.
+ * f_safe.call(foo::set_row, res0, 0, data0);
+ * f_safe.call(foo::set_row, res1, 1, data1);
+ * f_safe.call(foo::set_row, res2, 2, data2);
+ *
+ * // Even though the last call has not synchronized yet, we can safely start
+ * // accessing foo. The last copy will synchronize before any of the
+ * // following calls are launched.
+ *
+ * // The following calls will all overlap on the device using different
+ * // streams. Even though we are retrieving on different streams than were
+ * // used to write each of these rows, the wrapper will synchronize on the
+ * // streams previously used to modify the wrapped object before allowing
+ * // access to that object with any of the following calls.
+ * auto row2 = std::as_const(f_safe).call(foo::get_row, res0, 2);
+ * auto row1 = std::as_const(f_safe).call(foo::get_row, res1, 1);
+ * auto row0 = std::as_const(f_safe).call(foo::get_row, res1, 0);
+ *
+ * // Note that it is not yet safe to access row0, row1, and row2 data on the
+ * // host, since we have not yet synchronized the resources used to access
+ * // them. We could simply call resource::sync_stream on res0 and res1, but we
+ * // would prefer to avoid unnecessary re-synchronization once this has
+ * // occurred. To keep track of which streams still require
+ * // synchronization, we can instead use a helper method of the
+ * // streamsafe_wrapper.
+ *
+ * // Synchronize on the streams owned by res0 and if those streams are in our
+ * // list of streams which might require synchronization, remove them.
+ * f_safe.synchronize(res0);
+ *
+ * // We may wish to be even more efficient than that, avoiding any
+ * // synchronization at all if it is no longer required. For instance, if
+ * // set_row had been called from another thread after the get_row calls
+ * // above, the accessor stream provided by res1 would already have been
+ * synchronized. To synchronize only streams which have been used to access
+ * // or modify the wrapped object, streamsafe_wrapper offers an additional
+ * // helper.
+ *
+ * f_safe.synchronize_if_required(res1);
+ *
+ * // row0, row1, and row2 can now safely be accessed from the host.
+ *
+ * // Note that in the above example, we could have been slightly more
+ * // efficient if we were allowed to overlap the copies of the three rows
+ * // into the underlying foo buffer to begin with. Let's run through the
+ * // same example using unsafe_call to demonstrate how this would be done.
+ * auto f_unsafe = streamsafe_wrapper<foo>{res0};
+ *
+ * // Note that res0's stream was used to make the initial device
+ * // allocation. So, we are free to make an unsafe_call using res0. This
+ * // is useful because it allows us to avoid an unnecessary
+ * // synchronization on the same stream after allocation.
+ *
+ * f_unsafe.unsafe_call(foo::set_row, res0, 0, data0);
+ *
+ * // Now we would like to use different streams to efficiently copy the
+ * // remaining data to device. Because we still cannot be sure that the device
+ * // allocation has completed, we must manually synchronize if we are going
+ * // to use unsafe_call. We could simply synchronize res0, or if we just
+ * // want to efficiently ensure that all device-side modification and access to f_unsafe's
+ * device-side
+ * // data is complete, we can use another synchronization helper.
+ *
+ * // Synchronize on all streams that have been used to modify or access
+ * // f_unsafe and which we do not yet know to have been synchronized
+ * f_unsafe.synchronize();
+ *
+ * // Write rows 1 and 2 simultaneously on two different streams. As the name
+ * // implies, unsafe_call requires the caller to guarantee that this
+ * // modification does not lead to a race. If, for instance, we tried to
+ * // write both data1 and data2 to row 1 on separate streams, we cannot
+ * // predict what data would end up in the buffer afterward.
+ * f_unsafe.unsafe_call(foo::set_row, res1, 1, data1);
+ * f_unsafe.unsafe_call(foo::set_row, res2, 2, data2);
+ *
+ * // Even though unsafe_calls are not stream-safe with respect to each other
+ * // or any prior call, they *are* stream-safe with any subsequent safe call.
+ * // Therefore, we can now access the data we have just written without an
+ * // explicit synchronization.
+ *
+ * auto row2_unsafe = std::as_const(f_unsafe).call(foo::get_row, res0, 2);
+ * auto row1_unsafe = std::as_const(f_unsafe).call(foo::get_row, res1, 1);
+ * auto row0_unsafe = std::as_const(f_unsafe).call(foo::get_row, res2, 0);
+ *
+ * // As before, we must synchronize before accessing the data on the host
+ * // to ensure that the device-to-host copies are complete. In general, it is
+ * // most efficient to call the synchronize_if_required helper with each
+ * // of the raft resources which we have just used for data access, but for
+ * // brevity, we will use the synchronize helper again, which ensures
+ * // synchronization of device-side accesses as well as device-side
+ * // modifications of the wrapped object.
+ *
+ * f_unsafe.synchronize();
+ *
+ * // General rules to remember:
+ * // 1. When accessing object data, always use `call` and synchronize only
+ * // on the resources used in that access.
+ * // 2. When modifying object data, `unsafe_call` can be used so long as
+ * // concurrent calls are accessing non-overlapping device memory.
+ * // 3. If in doubt, use the `synchronize_if_required` helper to
+ * // efficiently synchronize.
  */
-template<typename T>
+template <typename T>
 struct streamsafe_wrapper {
   using wrapped_type = T;
-  template<typename... Args>
-  streamsafe_wrapper(Args&&... args): wrapped_{std::make_unique<T>(std::forward<Args>(args)...)} {}
+  template <typename... Args>
+  explicit streamsafe_wrapper(resources const& res, Args&&... args)
+    : mtx_{}, wrapped_{[this, &res, args = std::make_tuple(std::forward<Args>(args)...)]() {
+        auto lock = modifier_lock{mtx_, res};
+        return std::apply(
+          [res](auto&&... args) { return std::make_unique<T>(res, std::forward<Args>(args)...); },
+          std::move(args));
+      }()}
+  {
+  }
 
   template <typename Ret, typename... Args>
-  auto call(Ret (T::*func)(Args...), raft::device_resources const& res, Args... args) const {
+  auto call(Ret (T::*func)(resources const&, Args...), resources const& res, Args... args) const
+  {
     auto lock = user_lock{mtx_, res};
     return wrapped_->*func(res, std::forward<Args>(args)...);
   }
   template <typename Ret, typename... Args>
-  auto call(Ret (T::*func)(Args...), raft::device_resources const& res, Args... args) {
+  auto call(Ret (T::*func)(resources const&, Args...), resources const& res, Args... args)
+  {
     auto lock = modifier_lock{mtx_, res};
     return wrapped_->*func(res, std::forward<Args>(args)...);
   }
+  template <typename Ret, typename... Args>
+  auto unsafe_call(Ret (T::*func)(resources const&, Args...), resources const& res, Args... args)
+  {
+    auto lock = modifier_lock{mtx_, res, true};
+    return wrapped_->*func(res, std::forward<Args>(args)...);
+  }
+
+  // Synchronize all device-side work that has occurred on the underlying
+  // object, including both modification and use
+  auto synchronize() { mtx_->synchronize(); }
+  // Synchronize on any stream owned by res and remove those streams from
+  // the sets requiring synchronization
+  auto synchronize(resources const& res) { mtx_->synchronize(res); }
+  // Synchronize on the given stream and remove that stream from
+  // the sets requiring synchronization
+  auto synchronize(resources const& res, rmm::cuda_stream_view stream)
+  {
+    mtx_->synchronize(res, stream);
+  }
+
+  // Synchronize on any stream owned by res if and only if it is among those
+  // requiring synchronization and then remove it from the corresponding set.
+  auto synchronize_if_required(resources const& res) { mtx_->synchronize_if_required(res); }
+  // Synchronize on the given stream if and only if it is among those
+  // requiring synchronization and then remove it from the corresponding set.
+  auto synchronize_if_required(resources const& res, rmm::cuda_stream_view stream)
+  {
+    mtx_->synchronize_if_required(res, stream);
+  }
+
  private:
   // A class for coordinating access to a resource that may be modified by some
-  // threads and used without modification by others.
-  class modification_mutex {
-    void acquire_for_modifier(raft::device_resources& mod_res) {
+  // threads/streams and used without modification by others.
+  struct modification_mutex {
+    void synchronize()
+    {
+      // Grab a lock to prevent new users from adding work or new
+      // modifiers from modifying
+      auto tmp_lock = ordered_lock{mtx_};
+      // Synchronize all streams that might be using or modifying the locked
+      // object
+      synchronize_modifiers();
+      synchronize_users();
+    }
+    void synchronize(resources const& res)
+    {
+      auto tmp_lock = ordered_lock{mtx_};
+      auto stream   = resource::get_cuda_stream(res).value();
+      resource::sync_stream(res);
+      user_streams_.erase(stream);
+      modifier_streams_.erase(stream);
+      if (resource::is_stream_pool_initialized(res)) {
+        resource::sync_stream_pool(res);
+        for (auto stream_idx = std::size_t{}; stream_idx < resource::get_stream_pool_size(res);
+             ++stream_idx) {
+          stream = resource::get_stream_from_stream_pool(res, stream_idx).value();
+          user_streams_.erase(stream);
+          modifier_streams_.erase(stream);
+        }
+      }
+    }
+
+    void synchronize(resources const& res, rmm::cuda_stream_view stream)
+    {
+      auto tmp_lock = ordered_lock{mtx_};
+      resource::sync_stream(res, stream);
+      user_streams_.erase(stream.value());
+      modifier_streams_.erase(stream.value());
+    };
+
+    // Synchronize the indicated stream only if it was used to modify or access
+    // the locked object and has not yet been synchronized
+    void synchronize_if_required(resources const& res, rmm::cuda_stream_view stream)
+    {
+      auto tmp_lock = ordered_lock{mtx_};
+      _synchronize_if_required(res, stream);
+    }
+
+    void synchronize_if_required(resources const& res)
+    {
+      auto tmp_lock = ordered_lock{mtx_};
+      _synchronize_if_required(res, resource::get_cuda_stream(res));
+      if (resource::is_stream_pool_initialized(res)) {
+        for (auto stream_idx = std::size_t{}; stream_idx < resource::get_stream_pool_size(res);
+             ++stream_idx) {
+          _synchronize_if_required(res, resource::get_stream_from_stream_pool(res, stream_idx));
+        }
+      }
+    }
+
+   private:
+    void _synchronize_if_required(resources const& res, rmm::cuda_stream_view stream)
+    {
+      auto users_iter = user_streams_.find(stream.value());
+      if (users_iter != std::end(user_streams_)) {
+        user_streams_.erase(users_iter);
+        resource::sync_stream(res, stream);
+      }
+    }
+    static void synchronize(std::set<cudaStream_t>& stream_set)
+    {
+      while (stream_set.size() != std::size_t{}) {
+        for (auto stream : stream_set) {
+          auto status = cudaStreamQuery(stream);
+          if (status != cudaErrorNotReady) {
+            // Whether this stream has succeeded or errored out, it is no
+            // longer a stream we need to keep track of
+            if (stream_set.erase(stream) != std::size_t{}) {
+              if (status != cudaErrorInvalidResourceHandle) { RAFT_CUDA_TRY(status); }
+              break;  // Do not continue to iterate on modified set
+            }
+          }
+        }
+      }
+    }
+
+    // Synchronize on any stream that might have modified the locked object
+    void synchronize_modifiers() { synchronize(modifier_streams_); }
+
+    // Synchronize on any stream that accessed this object but did not modify
+    // it
+    void synchronize_users() { synchronize(user_streams_); }
+
+    void acquire_for_modifier(resources const& mod_res, bool allow_modifier_overlap = false)
+    {
       // Prevent any new users from incrementing work counter
-      // TODO(wphicks): Use ordered locks for this
-      lock_ = std::make_unique<std::unique_lock<std::mutex>>(mtx_);
-      modifier_resources_ = &mod_res;
+      lock_ = std::make_unique<ordered_lock>(mtx_);
       // Wait until all work in progress is done
-      while(currently_using_.load() != 0);
+      while (currently_using_.load() != 0 && user_streams_.size() != 0) {
+        if (currently_using_.load() == 0) {
+          synchronize_users();
+        } else {
+          // Yield to user threads so they have a chance to decrement
+          // currently_using_, since that occurs outside of a lock
+          std::this_thread::yield();
+        }
+      };
+      if (!allow_modifier_overlap) { synchronize_modifiers(); }
+      // Keep track of any streams which might be modifying the locked object
+      modifier_streams_.insert(resource::get_cuda_stream(mod_res).value());
+      if (resource::is_stream_pool_initialized(mod_res)) {
+        for (auto stream_idx = std::size_t{}; stream_idx < resource::get_stream_pool_size(mod_res);
+             ++stream_idx) {
+          modifier_streams_.insert(
+            resource::get_stream_from_stream_pool(mod_res, stream_idx).value());
+        }
+      }
       std::atomic_thread_fence(std::memory_order_acquire);
-      // Ensure that all user threads have completed their work on device
-      for (auto res_ : user_resources_) {
-        res_->sync_stream();
-        if (res_->is_stream_pool_initialized()) {
-          res_->sync_stream_pool();
-        }
-      }
-      user_resources_.clear();
     }
-    void release_from_modifier() {
-      lock_.reset();
-    }
-    void acquire_for_user(raft::device_resources const& user_res) const {
-      auto tmp_lock = std::unique_lock<std::mutex>{mtx_};
+
+    void release_from_modifier() { lock_.reset(); }
+
+    void acquire_for_user(resources const& user_res) const
+    {
+      auto tmp_lock = ordered_lock{mtx_};
       // Ensure that all modifying threads have completed their work on device
-      if (modifier_resources_ != nullptr) {
-        modifier_resources_->sync_stream();
-        if (modifier_resources_->is_stream_pool_initialized()) {
-          modifier_resources_->sync_stream_pool();
+      synchronize_modifiers();
+      // Any stream on this resource is a potential user of this object. Track
+      // them all in order to synchronize before modification.
+      user_streams_.insert(resource::get_cuda_stream(user_res).value());
+      if (resource::is_stream_pool_initialized(user_res)) {
+        for (auto stream_idx = std::size_t{}; stream_idx < resource::get_stream_pool_size(user_res);
+             ++stream_idx) {
+          user_streams_.insert(resource::get_stream_from_stream_pool(user_res, stream_idx).value());
         }
-        modifier_resources_ = nullptr;
-      }
-      if (std::find(std::begin(user_resources_), std::end(user_resources_), &user_res) == std::end(user_resources_)) {
-        user_resources_.push_back(&user_res);
       }
       ++currently_using_;
     }
-    void release_from_user() const {
+    void release_from_user() const
+    {
       std::atomic_thread_fence(std::memory_order_release);
       --currently_using_;
     }
-    mutable std::mutex mtx_{};
+    mutable ordered_mutex mtx_{};
     mutable std::atomic<int> currently_using_{};
-    mutable std::unique_ptr<std::unique_lock<std::mutex>> lock_{nullptr};
-    // TODO(wphicks): Just store the streams and sync on them
-    mutable std::vector<raft::device_resources*> user_resources_{};
-    mutable raft::device_resources const* modifier_resources_{nullptr};
-    std::unique_ptr<T> wrapped_;
+    mutable std::unique_ptr<ordered_lock> lock_{nullptr};
+    // The streams which have been used or may have been used to access but
+    // not modify the locked object.
+    // Q: Why not simply store the raft::resources objects themselves?
+    // A: Because those objects may go out of scope before we need to
+    // query them in order to guarantee that user streams have completed work before modification
+    // streams. The streams may have been destroyed, but we can at least query
+    // them and ignore the cudaErrorInvalidResourceHandle that gets
+    // returned.
+    mutable std::set<cudaStream_t> user_streams_{};
+    mutable std::set<cudaStream_t> modifier_streams_{};
     friend struct modifier_lock;
     friend struct user_lock;
   };
 
   // A lock acquired to modify the wrapped object.
   struct modifier_lock {
-    modifier_lock(modification_mutex& mtx, raft::device_resources const& res) : mtx_{
-      [&mtx, &res]() {
-        mtx.acquire_for_modifier(res);
-        return &mtx;
-      }()
-    } {}
-    ~modifier_lock() {
-      mtx_->release_from_modifier();
+    modifier_lock(modification_mutex& mtx,
+                  resources const& res,
+                  bool allow_modifier_overlap = false)
+      : mtx_{[&mtx, &res, allow_modifier_overlap]() {
+          mtx.acquire_for_modifier(res, allow_modifier_overlap);
+          return &mtx;
+        }()}
+    {
     }
+    ~modifier_lock() { mtx_->release_from_modifier(); }
+
    private:
     modification_mutex* mtx_;
   };
@@ -225,17 +594,20 @@ struct streamsafe_wrapper {
   // A lock acquired to use but not modify the wrapped object. We ensure that
   // only const methods can be accessed while protected by this lock.
   struct user_lock {
-    user_lock(modification_mutex const& mtx, raft::device_resources const& res) : mtx_{
-      [&mtx, &res]() {
-        mtx.acquire_for_user(res);
-        return &mtx;
-      }()
-    } {}
-    ~user_lock() {
-      mtx_->release_from_user();
+    user_lock(modification_mutex const& mtx, resources const& res)
+      : mtx_{[&mtx, &res]() {
+          mtx.acquire_for_user(res);
+          return &mtx;
+        }()}
+    {
     }
+    ~user_lock() { mtx_->release_from_user(); }
+
    private:
     modification_mutex const* mtx_;
   };
   modification_mutex mtx_;
+  std::unique_ptr<T> wrapped_;
 };
+
+}  // namespace raft
