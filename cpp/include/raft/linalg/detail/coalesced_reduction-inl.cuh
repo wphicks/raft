@@ -536,6 +536,9 @@ void coalescedReductionThick(OutType* dots,
    *  2. coalescedReductionThinKernel reduces [N x BlocksPerRow] to [N x 1]. It doesn't apply any
    *     main_op but applies final_op. If in-place, the existing and new values are reduced.
    */
+  std::cout << "BEFORE" << std::endl;
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
+  std::cout << "AFTER" << std::endl;
   if constexpr (std::is_same_v<ReduceLambda, raft::add_op>) {
     coalescedSumThickKernel<ThickPolicy>
       <<<blocks, threads, 0, stream>>>(buffer.data(), data, D, N, init, main_op);
