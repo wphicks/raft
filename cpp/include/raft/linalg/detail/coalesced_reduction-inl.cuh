@@ -528,6 +528,8 @@ void coalescedReductionThick(OutType* dots,
 
   rmm::device_uvector<OutType> buffer(N * ThickPolicy::BlocksPerRow, stream);
 
+  std::cout << ">>>>>>>>>>>>>> BLOCKS: " << N << ", " << ThickPolicy::BlocksPerRow << " THREADS: " << ThickPolicy::ThreadsPerBlock << std::endl;
+
   /* We apply a two-step reduction:
    *  1. coalescedReductionThickKernel reduces the [N x D] input data to [N x BlocksPerRow]. It
    *     applies the main_op but not the final op.
