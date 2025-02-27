@@ -17,6 +17,7 @@
 #pragma once
 
 // for cmath:
+#include <cuda_runtime_api.h>
 #define _USE_MATH_DEFINES
 
 #include <raft/core/detail/macros.hpp>
@@ -1719,6 +1720,7 @@ auto lanczos_smallest(
 
   auto cublas_h = resource::get_cublas_handle(handle);
   auto v0nrm    = raft::make_device_vector<ValueTypeT, uint32_t>(handle, 1);
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   std::cout << "G\n";
   raft::linalg::norm(handle,
                      v0_view,
@@ -1726,6 +1728,7 @@ auto lanczos_smallest(
                      raft::linalg::L2Norm,
                      raft::linalg::Apply::ALONG_ROWS,
                      raft::sqrt_op());
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
 
   auto v0_vector_const = raft::make_device_vector_view<const ValueTypeT, uint32_t>(v0, n);
 
