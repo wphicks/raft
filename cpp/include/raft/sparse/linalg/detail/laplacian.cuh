@@ -101,6 +101,8 @@ auto compute_graph_laplacian(
   auto static constexpr const threads_per_block = 256;
   auto blocks = std::min(int((dim + threads_per_block - 1) / threads_per_block), 65535);
   auto stream = resource::get_cuda_stream(res);
+  std::cout << "TPB: " << threads_per_block << " Blocks: " << blocks <<
+    std::endl;
   detail::compute_graph_laplacian_kernel<<<threads_per_block, blocks, 0, stream>>>(
     result.get_elements().data(),
     result_structure.get_indices().data(),
