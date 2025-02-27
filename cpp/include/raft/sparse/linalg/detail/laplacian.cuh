@@ -99,7 +99,7 @@ auto compute_graph_laplacian(
     input_structure.get_nnz() + dim);
   auto result_structure                         = result.structure_view();
   auto static constexpr const threads_per_block = 256;
-  auto blocks = std::min(int((dim + threads_per_block - 1) / threads_per_block), 65535);
+  auto blocks = std::min(int((dim + threads_per_block - 1) / threads_per_block), 1024);
   auto stream = resource::get_cuda_stream(res);
   std::cout << "TPB: " << threads_per_block << " Blocks: " << blocks <<
     std::endl;
