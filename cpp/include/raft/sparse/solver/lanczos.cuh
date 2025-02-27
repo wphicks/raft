@@ -50,6 +50,7 @@ auto lanczos_compute_smallest_eigenvectors(
   raft::device_vector_view<ValueTypeT, uint32_t, raft::col_major> eigenvalues,
   raft::device_matrix_view<ValueTypeT, uint32_t, raft::col_major> eigenvectors) -> int
 {
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   return detail::lanczos_compute_smallest_eigenvectors<IndexTypeT, ValueTypeT>(
     handle, config, A, v0, eigenvalues, eigenvectors);
 }

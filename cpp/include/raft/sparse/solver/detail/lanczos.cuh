@@ -1704,6 +1704,7 @@ auto lanczos_smallest(
   ValueTypeT* v0,
   uint64_t seed) -> int
 {
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   std::cout << "F\n";
   int n       = A.structure_view().get_n_rows();
   int ncv     = restartIter;
@@ -2098,6 +2099,7 @@ auto lanczos_compute_smallest_eigenvectors(
   raft::device_vector_view<ValueTypeT, uint32_t> eigenvalues,
   raft::device_matrix_view<ValueTypeT, uint32_t, raft::col_major> eigenvectors) -> int
 {
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   std::cout << "B\n";
   if (v0.has_value()) {
     std::cout << "C\n";
@@ -2118,6 +2120,7 @@ auto lanczos_compute_smallest_eigenvectors(
     auto temp_v0 = raft::make_device_vector<ValueTypeT, uint32_t>(handle, n);
     raft::random::RngState rng_state(config.seed);
     raft::random::uniform(handle, rng_state, temp_v0.view(), ValueTypeT{0.0}, ValueTypeT{1.0});
+    RAFT_CUDA_TRY(cudaPeekAtLastError());
     std::cout << "E\n";
     return lanczos_smallest(handle,
                             A,

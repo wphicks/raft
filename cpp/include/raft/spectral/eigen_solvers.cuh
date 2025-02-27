@@ -85,6 +85,8 @@ struct lanczos_solver_t {
       std::nullopt};
     auto input_structure = input.structure_view();
 
+    std::cout << "A\n";
+    RAFT_CUDA_TRY(cudaPeekAtLastError());
     auto solver_iterations = sparse::solver::lanczos_compute_smallest_eigenvectors(
       handle,
       lanczos_config,
