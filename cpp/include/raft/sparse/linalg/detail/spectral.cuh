@@ -42,6 +42,7 @@ void fit_embedding(raft::resources const& handle,
                    unsigned long long seed = 1234567)
 {
   auto stream = resource::get_cuda_stream(handle);
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   rmm::device_uvector<int> src_offsets(n + 1, stream);
   rmm::device_uvector<int> dst_cols(nnz, stream);
   rmm::device_uvector<T> dst_vals(nnz, stream);
@@ -54,6 +55,7 @@ void fit_embedding(raft::resources const& handle,
                       src_offsets.data(),
                       dst_cols.data(),
                       dst_vals.data());
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
 
   rmm::device_uvector<T> eigVals(n_components + 1, stream);
   rmm::device_uvector<T> eigVecs(n * (n_components + 1), stream);
@@ -79,6 +81,7 @@ void fit_embedding(raft::resources const& handle,
   value_type tol          = 0.01;
   index_type restart_iter = 15 + neigvs;  // what cugraph is using
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   raft::spectral::eigen_solver_config_t<index_type, value_type, nnz_t> cfg{
     neigvs, maxiter, restart_iter, tol};
 
@@ -105,6 +108,7 @@ void fit_embedding(raft::resources const& handle,
     }
   };
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   raft::spectral::partition(handle,
                             r_csr_m,
                             eig_solver,
@@ -113,6 +117,7 @@ void fit_embedding(raft::resources const& handle,
                             eigVals.data(),
                             eigVecs.data());
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   raft::copy<T>(out, eigVecs.data() + n, n * n_components, stream);
 
   RAFT_CUDA_TRY(cudaGetLastError());
