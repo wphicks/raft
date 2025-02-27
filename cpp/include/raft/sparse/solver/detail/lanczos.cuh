@@ -1703,6 +1703,7 @@ auto lanczos_smallest(
   ValueTypeT* v0,
   uint64_t seed) -> int
 {
+  std::cout << "F\n";
   int n       = A.structure_view().get_n_rows();
   int ncv     = restartIter;
   auto stream = resource::get_cuda_stream(handle);
@@ -1718,6 +1719,7 @@ auto lanczos_smallest(
 
   auto cublas_h = resource::get_cublas_handle(handle);
   auto v0nrm    = raft::make_device_vector<ValueTypeT, uint32_t>(handle, 1);
+  std::cout << "G\n";
   raft::linalg::norm(handle,
                      v0_view,
                      v0nrm.view(),
@@ -1732,6 +1734,7 @@ auto lanczos_smallest(
       return y / *device_scalar;
     });
 
+  std::cout << "H\n";
   auto alpha      = raft::make_device_matrix<ValueTypeT, uint32_t, raft::row_major>(handle, 1, ncv);
   auto beta       = raft::make_device_matrix<ValueTypeT, uint32_t, raft::row_major>(handle, 1, ncv);
   ValueTypeT zero = 0;
@@ -1742,6 +1745,7 @@ auto lanczos_smallest(
   auto aux_uu = raft::make_device_matrix<ValueTypeT, uint32_t, raft::row_major>(handle, 1, ncv);
   auto vv     = raft::make_device_matrix<ValueTypeT, uint32_t, raft::row_major>(handle, 1, n);
 
+  std::cout << "I\n";
   lanczos_aux(handle,
               A,
               V.view(),
@@ -1755,6 +1759,7 @@ auto lanczos_smallest(
               aux_uu.view(),
               vv.view());
 
+  std::cout << "J\n";
   auto eigenvectors =
     raft::make_device_matrix<ValueTypeT, uint32_t, raft::col_major>(handle, ncv, ncv);
   auto eigenvalues = raft::make_device_vector<ValueTypeT, uint32_t>(handle, ncv);
@@ -1769,6 +1774,7 @@ auto lanczos_smallest(
                                              eigenvectors.view(),
                                              eigenvalues.view());
 
+  std::cout << "K\n";
   auto eigenvectors_k = raft::make_device_matrix_view<ValueTypeT, uint32_t, raft::col_major>(
     eigenvectors.data_handle(), ncv, nEigVecs);
   auto eigenvalues_k =
@@ -1789,6 +1795,7 @@ auto lanczos_smallest(
       eigenvectors.data_handle(), ncv, nEigVecs);
   auto S_matrix = raft::make_device_matrix_view<ValueTypeT, IndexTypeT, raft::col_major>(
     s.data_handle(), 1, nEigVecs);
+  std::cout << "L\n";
 
   raft::matrix::slice_coordinates<IndexTypeT> coords(ncv - 1, 0, ncv, nEigVecs);
   raft::matrix::slice(handle, make_const_mdspan(eigenvectors_k_slice), S_matrix, coords);
@@ -1797,6 +1804,7 @@ auto lanczos_smallest(
   raft::matrix::fill(handle, beta_k.view(), zero);
   auto beta_scalar = raft::make_device_scalar_view<const ValueTypeT>(beta.data_handle() +
                                                                      (ncv - 1) * beta.stride(1));
+  std::cout << "M\n";
 
   raft::linalg::axpy(handle, beta_scalar, raft::make_const_mdspan(s.view()), beta_k.view());
 
@@ -1814,9 +1822,11 @@ auto lanczos_smallest(
                      raft::sqrt_op());
   raft::copy(&res, output.data_handle(), 1, stream);
   resource::sync_stream(handle, stream);
+  std::cout << "N\n";
 
   auto uu  = raft::make_device_matrix<ValueTypeT>(handle, 0, nEigVecs);
   int iter = ncv;
+  std::cout << "O\n";
   while (res > tol && iter < maxIter) {
     auto beta_view = raft::make_device_matrix_view<ValueTypeT, uint32_t, raft::row_major>(
       beta.data_handle(), 1, nEigVecs);
@@ -2067,9 +2077,11 @@ auto lanczos_smallest(
     resource::sync_stream(handle, stream);
     RAFT_LOG_TRACE("Iteration %f: residual (tolerance) %d", iter, res);
   }
+  std::cout << "P\n";
 
   raft::copy(eigVals_dev, eigenvalues_k.data_handle(), nEigVecs, stream);
   raft::copy(eigVecs_dev, ritz_eigenvectors.data_handle(), n * nEigVecs, stream);
+  std::cout << "Q\n";
 
   return 0;
 }
@@ -2083,7 +2095,9 @@ auto lanczos_compute_smallest_eigenvectors(
   raft::device_vector_view<ValueTypeT, uint32_t> eigenvalues,
   raft::device_matrix_view<ValueTypeT, uint32_t, raft::col_major> eigenvectors) -> int
 {
+  std::cout << "B\n";
   if (v0.has_value()) {
+    std::cout << "C\n";
     return lanczos_smallest(handle,
                             A,
                             config.n_components,
@@ -2095,11 +2109,13 @@ auto lanczos_compute_smallest_eigenvectors(
                             v0->data_handle(),
                             config.seed);
   } else {
+    std::cout << "D\n";
     // Handle the optional v0 initial Lanczos vector if nullopt is used
     auto n       = A.structure_view().get_n_rows();
     auto temp_v0 = raft::make_device_vector<ValueTypeT, uint32_t>(handle, n);
     raft::random::RngState rng_state(config.seed);
     raft::random::uniform(handle, rng_state, temp_v0.view(), ValueTypeT{0.0}, ValueTypeT{1.0});
+    std::cout << "E\n";
     return lanczos_smallest(handle,
                             A,
                             config.n_components,
