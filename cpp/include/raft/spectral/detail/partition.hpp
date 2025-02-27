@@ -78,6 +78,7 @@ std::tuple<vertex_t, weight_t, vertex_t> partition(
   weight_t* eigVals,
   weight_t* eigVecs)
 {
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   RAFT_EXPECTS(clusters != nullptr, "Null clusters buffer.");
   RAFT_EXPECTS(eigVals != nullptr, "Null eigVals buffer.");
   RAFT_EXPECTS(eigVecs != nullptr, "Null eigVecs buffer.");
@@ -97,6 +98,7 @@ std::tuple<vertex_t, weight_t, vertex_t> partition(
 
   // Compute eigenvectors of Laplacian
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   // Initialize Laplacian
   auto laplacian =
     raft::sparse::linalg::compute_graph_laplacian(handle, csr_m.to_csr_matrix_view());
@@ -104,18 +106,23 @@ std::tuple<vertex_t, weight_t, vertex_t> partition(
   auto eigen_config = eigen_solver.get_config();
   auto nEigVecs     = eigen_config.n_eigVecs;
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   // Compute smallest eigenvalues and eigenvectors
   std::get<0>(stats) =
     eigen_solver.solve_smallest_eigenvectors(handle, laplacian.view(), eigVals, eigVecs);
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   // Whiten eigenvector matrix
   transform_eigen_matrix(handle, n, nEigVecs, eigVecs);
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   // Find partition clustering
   auto pair_cluster = cluster_solver.solve(handle, n, nEigVecs, eigVecs, clusters);
 
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
   std::get<1>(stats) = pair_cluster.first;
   std::get<2>(stats) = pair_cluster.second;
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
 
   return stats;
 }
